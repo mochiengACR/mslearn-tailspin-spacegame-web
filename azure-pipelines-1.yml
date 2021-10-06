@@ -1,147 +1,94 @@
-# Starter pipeline
-# Start with a minimal pipeline that you can customize to build and deploy your code.
-# Add steps that build, run tests, deploy, and more:
-# https://aka.ms/yaml
-
+# Trigger pipeline when there's code changes committed to main branch:
 trigger:
+  - main 
 
-- '*'
+# Checkout ADOCS and AWS templates:
+resources:
+  repositories:
+  # ADOCS shared templates (https://github.com/ACRCode/ADOCS-templates):
+  - repository: azureSharedTemplates
+    type: github
+    endpoint: ACRCode
+    name: ACRCode/ADOCS-templates
+    branch: master
+    # AWS cloudformation templates (https://github.com/ACRCode/InfrastructureAsCode):
+  - repository: InfrastureAsCode
+    type: github
+    endpoint: ACRCode
+    name: ACRCode/InfrastructureAsCode
+    branch: main
 
- 
+# Not sure if the following snippet is needed:
+# variables:
+#   - group: Project Variable
 
-pool:
-
-  vmImage: 'ubuntu-18.04'
-
-  demands:
-
-    - npm
-
- 
-
-variables:
-
-  buildConfiguration: 'Release'
-
-  wwwrootDir: 'Tailspin.SpaceGame.Web/wwwroot'
-
-  dotnetSdkVersion: '3.1.300'
-
- 
-
-steps:
-
-- task: UseDotNet@2
-
-  displayName: 'Use .NET Core SDK $(dotnetSdkVersion)'
-
-  inputs:
-
-    version: '$(dotnetSdkVersion)'
-
- 
-
-- task: Npm@1
-
-  displayName: 'Run npm install'
-
-  inputs:
-
-    verbose: false
-
- 
-
-- script: './node_modules/.bin/node-sass $(wwwrootDir) --output $(wwwrootDir)'
-
-  displayName: 'Compile Sass assets'
-
- 
-
-- task: gulp@1
-
-  displayName: 'Run gulp tasks'
-
- 
-
-- script: 'echo "$(Build.DefinitionName), $(Build.BuildId), $(Build.BuildNumber)" > buildinfo.txt'
-
-  displayName: 'Write build info'
-
-  workingDirectory: $(wwwrootDir)
-
- 
-
-- task: DotNetCoreCLI@2
-
-  displayName: 'Restore project dependencies'
-
-  inputs:
-
-    command: 'restore'
-
-    projects: '**/*.csproj'
-
- 
-
-- task: DotNetCoreCLI@2
-
-  displayName: 'Build the project - $(buildConfiguration)'
-
-  inputs:
-
-    command: 'build'
-
-    arguments: '--no-restore --configuration $(buildConfiguration)'
-
-    projects: '**/*.csproj'
-
- 
-
-- task: DotNetCoreCLI@2
-
-  displayName: 'Publish the project - $(buildConfiguration)'
-
-  inputs:
-
-    command: 'publish'
-
-    projects: '**/*.csproj'
-
-    publishWebProjects: false
-
-    arguments: '--no-build --configuration $(buildConfiguration) --output $(Build.ArtifactStagingDirectory)/$(buildConfiguration)'
-
-    zipAfterPublish: true
-
- 
-
-- task: PublishPipelineArtifact@1
-
-  inputs:
-
-    targetPath: '$(Build.ArtifactStagingDirectory)/$(buildConfiguration)'
-
-    artifact: 'buildArtifacts'
-
-    publishLocation: 'pipeline'
-
-- task: DownloadBuildArtifacts@0
-  inputs:
-    buildType: 'current'
-    downloadType: 'single'
-    artifactName: 'drop'
-    downloadPath: '$(System.ArtifactsDirectory)'
-
-# - task: LambdaDeployFunction@1
-#   displayName: 'Deploy Lambda Function'
-#   inputs:
-#     awsCredentials: 'awsLambdaCICDPipeline'
-#     regionName: 'us-east-1'
-#     deploymentMode: 'codeandconfiguration'
-#     functionName: 'MyFunctionCreateFromAzureDevops'
-#     description: 'From AzureDevops'
-#     functionHandler: 'awsLambdaCICDPipeline::awsLambdaCICDPipeline.Function::FunctionHandler'
-#     runtime: 'dotnetcore2.1'
-#     codeLocation: 'localfile'
-#     localZipFile: '$(Build.ArtifactStagingDirectory)/drop/awsLambdaCICDPipeline.zip'
-#     roleARN: '$(AWS-Lambda-ARN)'
+# Provide custom parameters defined in the ADOCS shared template:
+extends:
+  template: shared-template.yml@azureSharedTemplates
+  parameters:
+    # Build & Test:
+    buildPoolImage: 'ubuntu-latest'
+    buildVersionMajor: 1
+    buildVersionMinor: 0
+    buildSteps:
+      - checkout: self
+      - task: NodeTool@0
+        displayName: 'Install Node.js'
+        inputs:
+          versionSpec: '14.x'
+      - script: |
+          npm install -g @angular/cli
+          npm install
+        displayName: 'Install NPM Dependencies'
+      - script: |
+          ng build --configuration=production --output-path $(Build.Artifactstagingdirectory)
+        displayName: 'Build Angular Project'
+      - script: |
+          npm run test-headless
+        displayName: 'Run Unit Tests'
+      - task: PublishPipelineArtifact@1
+        inputs:
+          targetPath: '$(Build.Artifactstagingdirectory)'
+          artifact: 'CICE-Frontend'
+          publishLocation: 'pipeline'
+      - task: ArchiveFiles@2
+        displayName: Create archive for front code
+        inputs:
+          rootFolderOrFile: '$(Build.Artifactstagingdirectory)'
+          includeRootFolder: false
+          archiveType: 'zip'
+          archiveFile: '$(Build.Artifactstagingdirectory)/CICE-Frontend.$(Build.BuildNumber).zip'
+          replaceExistingArchive: true
+      - publish: $(Build.Artifactstagingdirectory)/CICE-Frontend.$(Build.BuildNumber).zip
+        artifact: CICE-Frontend-zip
+      #Publish CloudFormationTemplates as artifacs
+      #########Start: Tasks to check out cloudformation template from repository IngrastureAsCode
+      # - checkout: InfrastureAsCode
+      #   path: CloudFormationTemplates
+      # - task: PublishPipelineArtifact@1
+      #   inputs:
+      #     targetPath: '$(Pipeline.Workspace)/CloudFormationTemplates/AWS/Project-AdocsTraining'
+      #     artifact: 'CloudFormationTemplates'
+      #     publishLocation: 'pipeline'
+      #########End
+      ####Start: Task to Check out cloudformation templates from same project repository
+      - task: PublishPipelineArtifact@1
+        inputs:
+          targetPath: '$(Build.SourcesDirectory)/CloudFormationTemplates'
+          artifact: 'CloudFormationTemplates'
+          publishLocation: 'pipeline'
+      ####END
+    # Security Scan:
+    securityScanAgentPool: 'Local Agents'
+    runCheckMarxScan: false
+    CheckmarxServiceConnection: 'ACR Checkmarx'
+    CheckmarxProject: 'ADOCSTraining'
+    CheckmarxCustomPreset: 'ACR Default'
+    CheckmarxFullTeamName: 'CxServer\SOC\ACR\All\Dev\ADOCS'
+    CheckmarxFolderExclusion: 'cvs, .svn, .hg , .git, .bzr, bin , obj,  backup, .idea, node_modules'
+    runIQScan: false
+    NexusServiceConnection: 'ACR Nexus IQ'
+    NexusAppId: 'ADOCSTraining'
+    NexusScanStage: 'Build'
+    ArtifactsForNexusScan: ''
+    NexusScanTarget: '$(Build.SourcesDirectory)/Nexus/**/**.zip'
